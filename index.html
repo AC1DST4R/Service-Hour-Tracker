@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Time Tracker</title>
+
+<style>
+/* General Styles */
+body {
+    font-family: system-ui, sans-serif;
+    background: #f2f6fa;
+    margin: 0;
+    padding: 14px;
+    text-align: center;
+}
+
+h1 {
+    font-size: 22px;
+    margin: 6px 0;
+}
+
+#monthYear {
+    color: #666;
+    margin-bottom: 10px;
+}
+
+/* Calendar */
+.calendar {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+}
+
+.day {
+    background: white;
+    padding: 6px;
+    border-radius: 8px;
+    font-size: 12px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.1);
+}
+
+.today {
+    border: 2px solid #4a90e2;
+}
+
+/* Controls - horizontal on desktop, vertical on mobile */
+.controls {
+    margin: 16px 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+}
+
+.controls input[type="date"],
+.controls button {
+    flex: 1 1 120px; /* grow, shrink, base width */
+    max-width: 180px;
+    padding: 12px;
+    font-size: 14px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+}
+
+.controls input[type="date"] {
+    border: 1px solid #ccc;
+}
+
+button {
+    background: #4a90e2;
+    color: white;
+}
+
+button:hover:enabled {
+    opacity: 0.9;
+}
+
+button:disabled {
+    background: #ccc;
+    cursor: default;
+}
+
+/* Red Clear Button */
+#clearBtn {
+    background: #e74c3c;
+}
+
+/* Mobile layout */
+@media (max-width: 600px) {
+    .controls {
+        flex-direction: column;
+    }
+    .controls input[type="date"],
+    .controls button {
+        max-width: 260px;
+    }
+}
+
+/* Counters */
+.counters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px,1fr));
+    gap: 14px;
+    margin-top: 20px;
+}
+
+.circle-wrap {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: auto;
+}
+
+svg {
+    transform: rotate(-90deg);
+}
+
+circle {
+    fill: none;
+    stroke-width: 10;
+}
+
+.bg { stroke: #e6e6e6; }
+.progress { stroke: #4a90e2; }
+.goal { stroke: #28a745; }
+
+.label {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+}
+
+.small {
+    font-size: 11px;
+    color: #555;
+}
+</style>
+</head>
+
+<body>
+
+<h1>Time Tracker</h1>
+<div id="monthYear"></div>
+
+<div class="calendar" id="calendar"></div>
+
+<div class="controls">
+    <input type="date" id="datePicker">
+    <button onclick="addTime(30, 'Chapel Practice')">+30 Minutes</button>
+    <button onclick="addTime(60, 'Chapel Day')">+1 Hour</button>
+    <button id="clearBtn" onclick="clearAllData()">🗑️ Clear All Data</button>
+    <button onclick="exportData()">📤 Export JSON</button>
+    <button onclick="document.getElementById('importFile').click()">📥 Import JSON</button>
+    <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(event)">
+    <button id="undoBtn" onclick="undoAction()" disabled>↩️ Undo</button>
+    <button id="redoBtn" onclick="redoAction()" disabled>↪️ Redo</button>
+</div>
+
+<div class="counters">
+    <!-- Hours -->
+    <div class="circle-wrap">
+        <svg width="120" height="120">
+            <circle class="bg" cx="60" cy="60" r="50"/>
+            <circle class="progress" cx="60" cy="60" r="50"
+                stroke-dasharray="314" stroke-dashoffset="314" id="hoursRing"/>
+        </svg>
+        <div class="label">
+            <div id="hoursValue">0</div>
+            <div class="small">Hours</div>
+        </div>
+    </div>
+
+    <!-- Minutes -->
+    <div class="circle-wrap">
+        <svg width="120" height="120">
+            <circle class="bg" cx="60" cy="60" r="50"/>
+            <circle class="progress" cx="60" cy="60" r="50"
+                stroke-dasharray="314" stroke-dashoffset="314" id="minutesRing"/>
+        </svg>
+        <div class="label">
+            <div id="minutesValue">0</div>
+            <div class="small">Minutes</div>
+        </div>
+    </div>
+
+    <!-- Goal -->
+    <div class="circle-wrap">
+        <svg width="120" height="120">
+            <circle class="bg" cx="60" cy="60" r="50"/>
+            <circle class="goal" cx="60" cy="60" r="50"
+                stroke-dasharray="314" stroke-dashoffset="314" id="goalRing"/>
+        </svg>
+        <div class="label">
+            <div id="goalValue">0 / 200</div>
+            <div class="small">Goal</div>
+        </div>
+    </div>
+</div>
+
+<script>
+const calendarEl = document.getElementById("calendar");
+const monthYearEl = document.getElementById("monthYear");
+const datePicker = document.getElementById("datePicker");
+const undoBtn = document.getElementById("undoBtn");
+const redoBtn = document.getElementById("redoBtn");
+
+const GOAL_HOURS = 200;
+const CIRC = 314;
+
+const now = new Date();
+const year = now.getFullYear();
+const month = now.getMonth();
+const today = now.getDate();
+const todayISO = now.toISOString().split("T")[0];
+
+datePicker.max = todayISO;
+datePicker.value = todayISO;
+
+// Undo/Redo stacks
+let undoStack = [];
+let redoStack = [];
+
+function storageKey(date) {
+    return `time-${date}`;
+}
+
+/* Save current state for undo */
+function pushUndo() {
+    const state = {};
+    Object.keys(localStorage).forEach(k => {
+        if (k.startsWith("time-")) state[k] = JSON.parse(localStorage.getItem(k));
+    });
+    undoStack.push(JSON.stringify(state));
+    redoStack = []; // manual change clears redo
+    updateUndoRedoButtons();
+}
+
+function updateUndoRedoButtons() {
+    undoBtn.disabled = undoStack.length === 0;
+    redoBtn.disabled = redoStack.length === 0;
+}
+
+/* Calendar */
+function loadCalendar() {
+    calendarEl.innerHTML = "";
+
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    monthYearEl.textContent =
+        now.toLocaleString("default", { month: "long", year: "numeric" });
+
+    for (let i = 0; i < firstDay; i++) {
+        calendarEl.appendChild(document.createElement("div"));
+    }
+
+    for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr =
+            `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+
+        const div = document.createElement("div");
+        div.className = "day";
+        if (d === today) div.classList.add("today");
+
+        const data = JSON.parse(localStorage.getItem(storageKey(dateStr)) || "[]");
+        const mins = data.reduce((a,b)=>a+b.minutes,0);
+
+        div.innerHTML = `<strong>${d}</strong><br>${mins} min`;
+        calendarEl.appendChild(div);
+    }
+}
+
+/* Animate numbers */
+function animateValue(el, end) {
+    const start = Number(el.textContent) || 0;
+    const duration = 400;
+    const startTime = performance.now();
+
+    function animate(time) {
+        const p = Math.min((time - startTime) / duration, 1);
+        el.textContent = Math.round(start + (end - start) * p);
+        if (p < 1) requestAnimationFrame(animate);
+    }
+    requestAnimationFrame(animate);
+}
+
+/* Update counters */
+function updateCounters() {
+    let totalMinutes = 0;
+
+    Object.keys(localStorage).forEach(k => {
+        if (k.startsWith("time-")) {
+            JSON.parse(localStorage.getItem(k))
+                .forEach(e => totalMinutes += e.minutes);
+        }
+    });
+
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    animateValue(hoursValue, hours);
+    animateValue(minutesValue, minutes);
+
+    hoursRing.style.strokeDashoffset =
+        CIRC - ((hours % 100) / 100) * CIRC;
+
+    minutesRing.style.strokeDashoffset =
+        CIRC - (minutes / 60) * CIRC;
+
+    goalRing.style.strokeDashoffset =
+        CIRC - Math.min(hours / GOAL_HOURS, 1) * CIRC;
+
+    goalValue.textContent =
+        `${Math.min(hours, GOAL_HOURS)} / ${GOAL_HOURS}`;
+}
+
+/* Add time */
+function addTime(minutes, preset) {
+    pushUndo();
+    const label = prompt("Time Label", preset);
+    if (!label) return;
+
+    const date = datePicker.value;
+    if (date > todayISO) return;
+
+    const data = JSON.parse(localStorage.getItem(storageKey(date)) || "[]");
+    data.push({ minutes, label });
+
+    localStorage.setItem(storageKey(date), JSON.stringify(data));
+
+    loadCalendar();
+    updateCounters();
+}
+
+/* Clear all data with double confirmation */
+function clearAllData() {
+    pushUndo();
+    if (!confirm("⚠️ Are you sure you want to clear all data?")) return;
+    if (!confirm("❗ This will permanently delete all your entries. Continue?")) return;
+
+    Object.keys(localStorage).forEach(k => {
+        if (k.startsWith("time-")) localStorage.removeItem(k);
+    });
+
+    loadCalendar();
+    updateCounters();
+}
+
+/* Export JSON */
+function exportData() {
+    const exportObj = {};
+    Object.keys(localStorage).forEach(k => {
+        if (k.startsWith("time-")) exportObj[k] = JSON.parse(localStorage.getItem(k));
+    });
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportObj));
+    const dlAnchor = document.createElement('a');
+    dlAnchor.setAttribute("href", dataStr);
+    dlAnchor.setAttribute("download", "time_tracker_backup.json");
+    document.body.appendChild(dlAnchor);
+    dlAnchor.click();
+    dlAnchor.remove();
+}
+
+/* Import JSON */
+function importData(event) {
+    pushUndo();
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (!confirm("⚠️ This will merge the JSON into your current data. Continue?")) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const imported = JSON.parse(e.target.result);
+            Object.keys(imported).forEach(k => {
+                if (k.startsWith("time-")) {
+                    const existing = JSON.parse(localStorage.getItem(k) || "[]");
+                    localStorage.setItem(k, JSON.stringify(existing.concat(imported[k])));
+                }
+            });
+            loadCalendar();
+            updateCounters();
+            alert("✅ JSON data imported successfully!");
+        } catch(err) {
+            alert("❌ Invalid JSON file.");
+        }
+    }
+    reader.readAsText(file);
+}
+
+/* Undo */
+function undoAction() {
+    if (undoStack.length === 0) return;
+    const lastState = undoStack.pop();
+    const currentState = {};
+    Object.keys(localStorage).forEach(k => {
+        if (k.startsWith("time-")) currentState[k] = JSON.parse(localStorage.getItem(k));
+    });
+    redoStack.push(JSON.stringify(currentState));
+
+    const parsed = JSON.parse(lastState);
+    Object.keys(localStorage).forEach(k => {
+        if (k.startsWith("time-")) localStorage.removeItem(k);
+    });
+    Object.keys(parsed).forEach(k => {
+        localStorage.setItem(k, JSON.stringify(parsed[k]));
+    });
+
+    loadCalendar();
+    updateCounters();
+    updateUndoRedoButtons();
+}
+
+/* Redo */
+function redoAction() {
+    if (redoStack.length === 0) return;
+    const lastRedo = redoStack.pop();
+    const currentState = {};
+    Object.keys(localStorage).forEach(k => {
+        if (k.startsWith("time-")) currentState[k] = JSON.parse(localStorage.getItem(k));
+    });
+    undoStack.push(JSON.stringify(currentState));
+
+    const parsed = JSON.parse(lastRedo);
+    Object.keys(localStorage).forEach(k => {
+        if (k.startsWith("time-")) localStorage.removeItem(k);
+    });
+    Object.keys(parsed).forEach(k => {
+        localStorage.setItem(k, JSON.stringify(parsed[k]));
+    });
+
+    loadCalendar();
+    updateCounters();
+    updateUndoRedoButtons();
+}
+
+/* Init */
+loadCalendar();
+updateCounters();
+updateUndoRedoButtons();
+</script>
+
+</body>
+</html>
